@@ -336,7 +336,7 @@ def manage_background_scanner(settings):
     if bg_scanner_thread and bg_scanner_thread.is_alive():
         bg_scanner_thread.join(timeout=1.0)
         
-    if not settings or not settings.get("char_data"):
+    if not settings or not settings.get("zone") or not settings.get("char_data"):
         return False
         
     current_threshold = settings.get("threshold", "auto")
@@ -453,7 +453,7 @@ def main():
             print(f"{menu_message}\n")
             menu_message = ""
             
-        is_ready = settings and settings.get("char_data")
+        is_ready = bool(settings and settings.get("zone") and settings.get("char_data"))
         
         if settings:
             config_count = len(settings.get('char_data', {}))
@@ -462,7 +462,12 @@ def main():
             s_rand = settings.get('scan_random_delay', 100)
             t_key = settings.get('toggle_key', 'space')
             t_mode = settings.get('trigger_mode', 'toggle')
-            status_text = f"Ready (Listening in background) - Press '{t_key.upper()}' to toggle" if is_ready else "Incomplete Configuration"
+            
+            if is_ready:
+                status_text = f"Ready (Listening in background) - Press '{t_key.upper()}' to toggle"
+            else:
+                status_text = "Scanner Disabled (Missing learning data or zone config)"
+                
             print(f"Status: {status_text} | {config_count} keys set")
         else:
             threshold = 'auto'
@@ -470,7 +475,7 @@ def main():
             s_rand = 100
             t_key = 'space'
             t_mode = 'toggle'
-            print("Status: No Settings Found")
+            print("Status: Scanner Disabled (No Settings Found)")
             
         print("\n0. Exit")
         print("1. Create New Settings (Wipes current data)")

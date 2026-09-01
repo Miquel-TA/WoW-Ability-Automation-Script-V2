@@ -3,6 +3,7 @@ import json
 import time
 import shutil
 import random
+import threading
 import tkinter as tk
 from pynput import keyboard
 from mss import mss
@@ -17,6 +18,10 @@ except Exception:
 SETTINGS_FILE = "settings.json"
 CAPTURES_DIR = "captures"
 VISUAL_ZOOM = 4 
+
+# Background thread management
+bg_scanner_thread = None
+scanner_stop_event = threading.Event()
 
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
@@ -242,19 +247,22 @@ def auto_detect_threshold(char_data):
 def is_mostly_white(color, threshold):
     return color[0] >= threshold and color[1] >= threshold and color[2] >= threshold
 
-def start_scanner(zone, char_data, threshold, scan_delay, scan_random_delay, toggle_key_str, trigger_mode):
-    stop_flag = [False]
+def scanner_worker(settings, stop_event):
+    zone = settings["zone"]
+    char_data = settings["char_data"]
+    threshold = settings.get("threshold", 200)
+    scan_delay = settings.get("scan_delay", 150) / 1000.0
+    scan_random_delay = settings.get("scan_random_delay", 100) / 1000.0
+    toggle_key_str = settings.get("toggle_key", "space").lower()
+    trigger_mode = settings.get("trigger_mode", "toggle")
+
     pressing_enabled = [False]
     key_pressed = [False]
     
     def on_press(key):
-        if key == keyboard.Key.esc:
-            stop_flag[0] = True
-            return False
-            
         try:
             k_name = getattr(key, 'char', None) or getattr(key, 'name', None)
-            if k_name and k_name.lower() == toggle_key_str.lower():
+            if k_name and k_name.lower() == toggle_key_str:
                 if trigger_mode == "toggle":
                     if not key_pressed[0]:
                         pressing_enabled[0] = not pressing_enabled[0]
@@ -267,7 +275,7 @@ def start_scanner(zone, char_data, threshold, scan_delay, scan_random_delay, tog
     def on_release(key):
         try:
             k_name = getattr(key, 'char', None) or getattr(key, 'name', None)
-            if k_name and k_name.lower() == toggle_key_str.lower():
+            if k_name and k_name.lower() == toggle_key_str:
                 if trigger_mode == "toggle":
                     key_pressed[0] = False
                 elif trigger_mode == "hold":
@@ -280,12 +288,13 @@ def start_scanner(zone, char_data, threshold, scan_delay, scan_random_delay, tog
     
     sct = mss()
     controller = keyboard.Controller()
-    base_delay = scan_delay / 1000.0
-    rand_delay_max = scan_random_delay / 1000.0
     
-    while not stop_flag[0]:
+    while not stop_event.is_set():
+        if not pressing_enabled[0]:
+            time.sleep(0.1)
+            continue
+            
         img_data = sct.grab(zone)
-        
         best_char = None
         best_pct = -1.0
         best_dot_count = 0
@@ -312,22 +321,37 @@ def start_scanner(zone, char_data, threshold, scan_delay, scan_random_delay, tog
                     best_char = char
                     best_dot_count = valid_dots
                 
-        pressed_key = None
         if best_pct == 100.0 and best_char:
-            pressed_key = best_char
-            if pressing_enabled[0]:
-                controller.press(pressed_key)
-                controller.release(pressed_key)
+            controller.press(best_char)
+            controller.release(best_char)
             
-        clear_screen()
-        status_text = "ENABLED" if pressing_enabled[0] else "PAUSED"
-        display_key = pressed_key if (pressed_key and pressing_enabled[0]) else 'None'
-        print(f"[{status_text}] Pressing: {display_key} | Detected: {best_char if best_pct == 100.0 else 'None'}")
-        print(f"\nPress Escape to stop. Press '{toggle_key_str.upper()}' to {trigger_mode} pressing.")
-            
-        time.sleep(base_delay + random.uniform(0, rand_delay_max))
+        time.sleep(scan_delay + random.uniform(0, scan_random_delay))
         
     listener.stop()
+
+def manage_background_scanner(settings):
+    global bg_scanner_thread, scanner_stop_event
+    
+    scanner_stop_event.set()
+    if bg_scanner_thread and bg_scanner_thread.is_alive():
+        bg_scanner_thread.join(timeout=1.0)
+        
+    if not settings or not settings.get("char_data"):
+        return False
+        
+    current_threshold = settings.get("threshold", "auto")
+    if current_threshold == "auto":
+        current_threshold = auto_detect_threshold(settings["char_data"])
+        settings["threshold"] = current_threshold
+        
+    scanner_stop_event.clear()
+    bg_scanner_thread = threading.Thread(
+        target=scanner_worker, 
+        args=(settings, scanner_stop_event), 
+        daemon=True
+    )
+    bg_scanner_thread.start()
+    return True
 
 def load_settings():
     if os.path.exists(SETTINGS_FILE):
@@ -415,14 +439,21 @@ def main():
     root.withdraw()
     
     menu_message = ""
+    settings_changed = True 
+    settings = None
     
     while True:
+        if settings_changed:
+            settings = load_settings()
+            manage_background_scanner(settings)
+            settings_changed = False
+            
         clear_screen()
         if menu_message:
             print(f"{menu_message}\n")
             menu_message = ""
             
-        settings = load_settings()
+        is_ready = settings and settings.get("char_data")
         
         if settings:
             config_count = len(settings.get('char_data', {}))
@@ -431,7 +462,8 @@ def main():
             s_rand = settings.get('scan_random_delay', 100)
             t_key = settings.get('toggle_key', 'space')
             t_mode = settings.get('trigger_mode', 'toggle')
-            print(f"Status: Settings Loaded ({config_count} keys configured)")
+            status_text = f"Ready (Listening in background) - Press '{t_key.upper()}' to toggle" if is_ready else "Incomplete Configuration"
+            print(f"Status: {status_text} | {config_count} keys set")
         else:
             threshold = 'auto'
             s_delay = 150
@@ -440,46 +472,30 @@ def main():
             t_mode = 'toggle'
             print("Status: No Settings Found")
             
-        print("1. Start Scanner")
-        print("2. Create New Settings (Wipes current data)")
-        print("3. View / Edit Configured Pictures")
-        print(f"4. Change Detection Threshold (Current: {threshold})")
-        print(f"5. Change Scan Delays (Base: {s_delay}ms, Rand: {s_rand}ms)")
-        print(f"6. Change Toggle Key (Current: {t_key})")
-        print(f"7. Change Trigger Mode (Current: {t_mode})")
+        print("\n0. Exit")
+        print("1. Create New Settings (Wipes current data)")
+        print("2. View / Edit Configured Pictures")
+        print(f"3. Change Detection Threshold (Current: {threshold})")
+        print(f"4. Change Scan Delays (Base: {s_delay}ms, Rand: {s_rand}ms)")
+        print(f"5. Change Toggle Key (Current: {t_key})")
+        print(f"6. Change Trigger Mode (Current: {t_mode})")
         
-        choice = input("\nSelect an option (1-7): ").strip()
+        choice = input("\nSelect an option: ").strip()
         
-        if choice == '1':
-            if settings and settings.get("char_data"):
-                current_threshold = settings["threshold"]
-                if current_threshold == "auto":
-                    current_threshold = auto_detect_threshold(settings["char_data"])
-                    settings["threshold"] = current_threshold
-                    with open(SETTINGS_FILE, "w") as f:
-                        json.dump(settings, f)
-                
-                start_scanner(
-                    settings["zone"], 
-                    settings["char_data"], 
-                    current_threshold, 
-                    settings["scan_delay"], 
-                    settings["scan_random_delay"],
-                    settings["toggle_key"],
-                    settings["trigger_mode"]
-                )
-                menu_message = "[Info] Scanner stopped."
-            else:
-                menu_message = "[Error] Cannot start. Please create settings and configure dots first."
-                
-        elif choice == '2':
+        if choice == '0':
+            scanner_stop_event.set()
+            print("Exiting tool...")
+            break
+            
+        elif choice == '1':
             delete_settings()
             if create_new_settings():
                 menu_message = "[Info] New settings created successfully."
             else:
                 menu_message = "[Error] Setup cancelled or failed."
+            settings_changed = True
                 
-        elif choice == '3':
+        elif choice == '2':
             if not settings or not os.path.exists(CAPTURES_DIR):
                 menu_message = "[Error] No settings or captures found."
             else:
@@ -487,8 +503,9 @@ def main():
                     menu_message = "[Info] Configurations updated successfully."
                 else:
                     menu_message = "[Error] Failed to edit captures."
+            settings_changed = True
                     
-        elif choice == '4':
+        elif choice == '3':
             if settings:
                 print("\n1. Auto-detect from saved images\n2. Enter manual value (0-255)")
                 t_choice = input("Select option (1-2): ").strip()
@@ -512,10 +529,11 @@ def main():
                         menu_message = "[Error] Invalid input. Must be an integer."
                 else:
                     menu_message = "[Error] Invalid choice."
+                settings_changed = True
             else:
                 menu_message = "[Error] Cannot change threshold. Create settings first."
                 
-        elif choice == '5':
+        elif choice == '4':
             if settings:
                 try:
                     new_base = int(input("Enter base scan delay in ms: ").strip())
@@ -530,10 +548,11 @@ def main():
                         menu_message = "[Error] Delays cannot be negative."
                 except ValueError:
                     menu_message = "[Error] Invalid input. Must be an integer."
+                settings_changed = True
             else:
                 menu_message = "[Error] Cannot change delays. Create settings first."
                 
-        elif choice == '6':
+        elif choice == '5':
             if settings:
                 new_key = input("Enter new toggle key (e.g., space, f9, insert, p): ").strip().lower()
                 if new_key:
@@ -543,16 +562,18 @@ def main():
                     menu_message = f"[Info] Toggle key set to '{new_key}'."
                 else:
                     menu_message = "[Error] Invalid key input."
+                settings_changed = True
             else:
                 menu_message = "[Error] Cannot change toggle key. Create settings first."
 
-        elif choice == '7':
+        elif choice == '6':
             if settings:
                 new_mode = "hold" if t_mode == "toggle" else "toggle"
                 settings["trigger_mode"] = new_mode
                 with open(SETTINGS_FILE, "w") as f:
                     json.dump(settings, f)
                 menu_message = f"[Info] Trigger mode is now '{new_mode}'."
+                settings_changed = True
             else:
                 menu_message = "[Error] Cannot change trigger mode. Create settings first."
                 

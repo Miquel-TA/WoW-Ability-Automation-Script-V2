@@ -1,0 +1,1 @@
+{"zone": {"left": 1248, "top": 888, "width": 80, "height": 79}, "char_data": {"8": [[34, 21], [39, 19], [45, 14], [44, 25], [42, 38], [43, 45], [43, 55], [43, 64], [37, 68], [48, 68]]}, "threshold": "auto", "scan_delay": 150, "scan_random_delay": 100, "toggle_key": "space", "trigger_mode": "toggle"}

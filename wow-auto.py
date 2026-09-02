@@ -45,11 +45,18 @@ class AreaSelector(tk.Toplevel):
         self.bind("<Escape>", lambda e: self.destroy())
 
     def on_press(self, event):
-        self.start_x, self.start_y = event.x, event.y
-        self.rect = self.canvas.create_rectangle(self.start_x, self.start_y, self.start_x, self.start_y, outline='red', width=3)
+        self.start_x = event.x
+        self.start_y = event.y
+        self.rect = self.canvas.create_rectangle(
+            self.start_x, self.start_y, self.start_x, self.start_y, outline='red', width=3
+        )
 
     def on_drag(self, event):
-        self.canvas.coords(self.rect, self.start_x, self.start_y, event.x, event.y)
+        x1 = min(self.start_x, event.x)
+        y1 = min(self.start_y, event.y)
+        x2 = max(self.start_x, event.x)
+        y2 = max(self.start_y, event.y)
+        self.canvas.coords(self.rect, x1, y1, x2, y2)
 
     def on_release(self, event):
         x1 = min(self.start_x, event.x)
@@ -70,6 +77,9 @@ def capture_learning_round(zone):
     sct = mss()
     
     def on_press(key):
+        if key == keyboard.Key.esc:
+            return False
+
         try:
             if hasattr(key, 'char') and key.char:
                 char = key.char.lower()
@@ -84,9 +94,6 @@ def capture_learning_round(zone):
                     print(f"Captured screen for key: '{char}'")
         except Exception:
             pass
-            
-        if key == keyboard.Key.esc:
-            return False
 
     with keyboard.Listener(on_press=on_press) as listener:
         listener.join()
@@ -111,7 +118,8 @@ class DotPlacer(tk.Toplevel):
         
         char, img = self.captures[self.index]
         self.orig_w, self.orig_h = img.size
-        self.scaled_w, self.scaled_h = self.orig_w * VISUAL_ZOOM, self.orig_h * VISUAL_ZOOM
+        self.scaled_w = self.orig_w * VISUAL_ZOOM
+        self.scaled_h = self.orig_h * VISUAL_ZOOM
         
         btn_frame_w = 200
         min_win_h = 140 
@@ -154,7 +162,8 @@ class DotPlacer(tk.Toplevel):
             
         char, img = self.captures[self.index]
         self.orig_w, self.orig_h = img.size
-        self.scaled_w, self.scaled_h = self.orig_w * VISUAL_ZOOM, self.orig_h * VISUAL_ZOOM
+        self.scaled_w = self.orig_w * VISUAL_ZOOM
+        self.scaled_h = self.orig_h * VISUAL_ZOOM
         
         btn_frame_w = 200
         min_win_h = 140
@@ -296,7 +305,6 @@ def scanner_worker(settings, stop_event):
             
         img_data = sct.grab(zone)
         best_char = None
-        best_pct = -1.0
         best_dot_count = 0
         
         for char, dots in char_data.items():
@@ -309,19 +317,20 @@ def scanner_worker(settings, stop_event):
             for (x, y) in dots:
                 if x >= zone['width'] or y >= zone['height']:
                     continue
+                    
                 valid_dots += 1
                 current_pixel = img_data.pixel(x, y)
                 if is_mostly_white(current_pixel, threshold):
                     matched_dots += 1
+                else:
+                    break 
                     
-            if valid_dots > 0:
-                pct = (matched_dots / valid_dots) * 100
-                if pct > best_pct or (pct == best_pct and valid_dots > best_dot_count):
-                    best_pct = pct
+            if valid_dots > 0 and matched_dots == valid_dots:
+                if valid_dots > best_dot_count:
                     best_char = char
                     best_dot_count = valid_dots
                 
-        if best_pct == 100.0 and best_char:
+        if best_char:
             controller.press(best_char)
             controller.release(best_char)
             

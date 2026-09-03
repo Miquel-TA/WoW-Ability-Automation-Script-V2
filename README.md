@@ -1,37 +1,46 @@
-# Lightweight Dot-Based OCR Keypress Automation
+# Lightweight Coordinate-Based OCR Macro
 
-This project is a lightweight, coordinate-based optical character recognition (OCR) system. It monitors a specified screen area, analyzes pixel brightness at predefined coordinates, and simulates keyboard events when the visual data matches known coordinate patterns.
+A highly efficient, multithreaded Python script that monitors a defined screen region, analyzes pixel brightness at user-configured coordinates, and simulates keyboard events when the visual data matches known patterns. 
 
-## Architecture and Components
+Rather than relying on heavy AI/ML libraries like Tesseract or OpenCV, this tool uses a lightweight **pixel-coordinate sampling** method (essentially placing "dots" on an image and checking their RGB values against an automatically calculated threshold). This results in extremely low latency and low CPU overhead.
 
-* **Screen Capture Engine**: Uses `mss` to perform high-speed, low-latency screen grabbing of the target bounding box.
-* **Input Management**: Uses `pynput` to listen for hardware trigger keys and to simulate software output keypresses.
-* **User Interface**: Uses `tkinter` to create a transparent overlay for bounding-box selection and a scaled visual interface to plot coordinate dots on captured images.
-* **Scanner Thread**: Operates continuously as a daemon thread. It compares current screen pixels against stored coordinate arrays. The pattern matching logic uses an early-exit condition (stopping evaluation upon the first pixel mismatch) to reduce CPU load.
+## Use Case & Addon Integration
+This tool is specifically designed to work in conjunction with UI-based rotation assistants in MMORPGs (such as World of Warcraft). 
 
-## Operation Logic
+By pairing this script with addons like **Hekili**, **Simple Assistent Combat Icon (SACI)**, or other equivalents:
+1. The in-game addon calculates the optimal combat rotation and displays an icon or color block on the screen.
+2. This script continuously monitors that specific screen coordinate.
+3. When the tool detects the visual pattern matching a configured ability, it automatically executes the corresponding keystroke.
 
-1. **Learning Phase**:
-* The user defines a target screen area.
-* The system records the screen area when the user presses an alphanumeric key.
-* The user plots visual reference points (dots) on the captured image. These points must represent the brightest (mostly white) pixels of the character.
+## How It Works
 
+1. **Zone Selection**: Using a transparent `tkinter` overlay, the user defines a bounding box on their screen (the OCR zone).
+2. **Learning Phase**: The user presses alphanumeric keys to capture screenshots of the OCR zone at that exact moment.
+3. **Dot Mapping (The "OCR")**: Using the built-in GUI, the user places arbitrary "dots" (pixel coordinates) on the captured images. 
+4. **Auto-Thresholding**: The script calculates the optimal RGB brightness threshold based on the darkest pixel selected during the mapping phase (minus a safety margin).
+5. **Background Thread Execution**: 
+   - A daemon thread uses `mss` to continuously grab the defined screen zone.
+   - It checks the real-time pixel data against the mapped coordinates for each profile.
+   - If a captured state matches all the mapped "dots" for a specific key (based on the auto-calculated threshold), `pynput` simulates that keypress.
 
-2. **Detection Phase**:
-* The background thread captures the target area at a configured interval.
-* It checks the RGB values of the pixels at the saved coordinate points.
-* If the RGB values of all points for a character exceed the configured threshold, the system simulates a keypress for that character.
+## Key Features
 
+* **Multi-Profile Management**: Configurations are saved as JSON files in a `profiles/` directory. Users can create, switch, and edit distinct configurations on the fly without restarting the script.
+* **Dynamic GUI Editor**: An interactive Tkinter-based canvas that scales up captures (4x Zoom) for precise, pixel-perfect coordinate mapping. Allows for dynamic addition/deletion of keys within an active profile.
+* **Smart Auto-Thresholding**: Eliminates the need for manual color calibration. The script automatically adjusts its detection sensitivity every time a profile is updated.
+* **Safe Input Handling**: 
+  - Toggle keys are restricted to single alphanumeric characters to prevent hooking loops or broken state machines.
+  - Supports both `Hold` and `Toggle` trigger modes.
+  - Configurable base and randomized scan delays to prevent input flooding and handle GCD (Global Cooldown) pacing.
+* **Memory Safe**: Screen capturing relies on properly managed `mss` context managers, preventing GDI handle/memory leaks during extended background monitoring sessions.
 
+## Technical Details
 
-## Configuration Structure
-
-The script stores operational parameters in `settings.json`.
-
-* `zone`: The target screen area coordinates (`left`, `top`, `width`, `height`).
-* `char_data`: A dictionary that maps target characters to lists of `[x, y]` relative pixel coordinates.
-* `threshold`: An integer (`0-255`) that defines the minimum value for all three RGB channels to classify a pixel as active. The auto-detect function calculates this based on the darkest pixel among the selected coordinate points.
-* `scan_delay`: The base delay between screen captures, in milliseconds.
-* `scan_random_delay`: The maximum random time added to the base delay, in milliseconds. Use this to prevent rate-limiting or mimic human input.
-* `toggle_key`: The keyboard key used to start or stop the scanning process.
-* `trigger_mode`: Defines the trigger logic. Valid values are `toggle` (press to start, press to stop) or `hold` (scan only while the key is pressed).
+* **Language**: Python 3.x
+* **Core Dependencies**: 
+  * `mss`: Handles ultra-fast, cross-platform screen captures.
+  * `pynput`: Manages asynchronous keyboard hooks and simulated keystrokes.
+  * `Pillow (PIL)`: Processes image data for Tkinter rendering and pixel-value extraction.
+  * `tkinter`: Standard GUI library used for the transparent overlay and the dot configurator.
+* **Thread Safety**: The background scanner runs as a daemon thread and is cleanly managed using `threading.Event()` flags. Input listeners run in their own respective threads provided by `pynput`.
+* **DPI Awareness**: Includes a `ctypes` call to enable Windows DPI awareness, ensuring the Tkinter overlay accurately maps to native screen coordinates on scaled displays.
